@@ -404,37 +404,18 @@
     vTreble.addTickables(tNotes);
     const vBass = new VF.Voice({ num_beats: Math.max(1, bNotes.length), beat_value: 4 }).setMode(VF.Voice.Mode.SOFT);
     vBass.addTickables(bNotes);
-    // Pre-format to initialize contexts
-    const formatter = new VF.Formatter();
-    formatter.joinVoices([vTreble]).format([vTreble], Math.max(1, vexWidth * 0.5));
-    formatter.joinVoices([vBass]).format([vBass], Math.max(1, vexWidth * 0.5));
-    // Evenly space notes across the stave without overflow
+    // Use VexFlow formatter to evenly space notes within the available width.
+    // Apply a small inner padding to avoid glyphs touching stave edges.
     const pad = Math.max(8, Math.min(24, vexWidth * 0.04));
-    const computeXs = (count) => {
-      if (count <= 1) return [vexX + vexWidth / 2];
-      const usable = Math.max(0, vexWidth - 2 * pad);
-      const step = count > 1 ? usable / (count - 1) : 0;
-      const xs = [];
-      for (let i = 0; i < count; i++) xs.push(vexX + pad + step * i);
-      return xs;
-    };
-    const tXs = computeXs(tNotes.length);
-    const bXs = computeXs(bNotes.length);
-    // Apply manual X positioning by shifting each note to desired location
-    tNotes.forEach((n, i) => {
-      n.setStave(vf.treble);
-      const desired = tXs[i];
-      const current = n.getX();
-      const delta = desired - current;
-      n.setXShift((n.getXShift ? n.getXShift() : 0) + delta);
-    });
-    bNotes.forEach((n, i) => {
-      n.setStave(vf.bass);
-      const desired = bXs[i];
-      const current = n.getX();
-      const delta = desired - current;
-      n.setXShift((n.getXShift ? n.getXShift() : 0) + delta);
-    });
+    const targetWidth = Math.max(1, vexWidth - 2 * pad);
+    const formatter = new VF.Formatter();
+    formatter.joinVoices([vTreble]);
+    formatter.format([vTreble], targetWidth);
+    formatter.joinVoices([vBass]);
+    formatter.format([vBass], targetWidth);
+    // Associate staves (ensures vertical alignment)
+    tNotes.forEach(n => n.setStave(vf.treble));
+    bNotes.forEach(n => n.setStave(vf.bass));
     vf.context.save();
     vf.context.scale(vf.scale, vf.scale);
     vTreble.draw(vf.context, vf.treble);
@@ -448,7 +429,7 @@
     const bassTick = vBass.getTickables()[curIndex];
     vf.context.restore();
     if (trebleTick) {
-      const x = (tXs[curIndex] ?? (vexX + (curIndex+0.5)*(vexWidth/Math.max(1,tNotes.length)))) * vf.scale;
+      const x = (trebleTick.getAbsoluteX ? trebleTick.getAbsoluteX() : (vexX + (curIndex+0.5)*(vexWidth/Math.max(1,tNotes.length)))) * vf.scale;
       ctx.save();
       ctx.strokeStyle = 'rgba(255,230,120,0.9)';
       ctx.lineWidth = 2;
@@ -456,7 +437,7 @@
       ctx.restore();
     }
     if (bassTick) {
-      const x = (bXs[curIndex] ?? (vexX + (curIndex+0.5)*(vexWidth/Math.max(1,bNotes.length)))) * vf.scale;
+      const x = (bassTick.getAbsoluteX ? bassTick.getAbsoluteX() : (vexX + (curIndex+0.5)*(vexWidth/Math.max(1,bNotes.length)))) * vf.scale;
       ctx.save();
       ctx.strokeStyle = 'rgba(255,230,120,0.9)';
       ctx.lineWidth = 2;
