@@ -12,19 +12,23 @@
   let vfState = null;
   /** @type {{ renderer: any, context: CanvasRenderingContext2D, treble: any, bass: any, key: string, scale: number } | null } */
   let vfGrand = null;
-  // Notation scale presets (percentage multipliers)
+  // Notation scaling: Auto or Manual presets
   const SCALE_PRESETS = [1.25, 1.5, 1.75, 2.0];
   const PREF_SCALE = 'staffy.scale';
-  function getNotationScale() {
+  const PREF_SCALE_MODE = 'staffy.scaleMode'; // 'auto' | 'manual'
+  function getScaleMode() {
+    return (localStorage.getItem(PREF_SCALE_MODE) || 'auto');
+  }
+  function getManualScale() {
     const saved = parseFloat(localStorage.getItem(PREF_SCALE) || '');
     if (Number.isFinite(saved) && saved > 0.5 && saved <= 3) return saved;
-    return SCALE_PRESETS[1]; // default 1.5x
+    return SCALE_PRESETS[1];
   }
 
   // Resize canvas to fit device pixel ratio for crisp rendering
   function resizeCanvas() {
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-    const fit = (localStorage.getItem('staffy.fit') || 'width');
+  const fit = (localStorage.getItem('staffy.fit') || 'window');
     // In fit-window mode, we lock to the viewport size to truly fill the window
     const overrideW = fit === 'window' ? window.innerWidth : null;
     const overrideH = fit === 'window' ? window.innerHeight : null;
@@ -127,7 +131,15 @@
   function ensureVexflow() {
     if (!VF) return null;
   const { marginX, staffWidth, w, h } = getStaffMetrics();
-  const scale = getNotationScale();
+  let scale = getManualScale();
+    if (getScaleMode() === 'auto') {
+      // Target a portion of the viewport height for a single staff (about 28%)
+      const tmpStave = new VF.Stave(0, 0, staffWidth);
+      tmpStave.addClef('treble');
+      let sH = 60; try { sH = tmpStave.getHeight ? tmpStave.getHeight() : 60; } catch {}
+      const targetH = Math.max(80, h * 0.28);
+      scale = Math.max(0.6, Math.min(3, targetH / sH));
+    }
     // Work in pre-scale coordinates so that after scaling, the width equals staffWidth
     const preX = marginX / scale;
     const preWidth = staffWidth / scale;
@@ -170,7 +182,7 @@
       return t === 'minor' ? `${r}m` : r;
     };
     const keySig = getSelectedKeySig();
-    const scale = getNotationScale();
+    let scale = getManualScale();
     const preX = marginX / scale;
     const preWidth = staffWidth / scale;
     const key = `grand|${preX}|${preWidth}|${w}|${h}|s${scale}|g${gap}|k${keySig}`;
@@ -185,12 +197,26 @@
       let tH = 60, bH = 60;
       try { tH = treble.getHeight ? treble.getHeight() : 60; } catch {}
       try { bH = bass.getHeight ? bass.getHeight() : 60; } catch {}
+      if (getScaleMode() === 'auto') {
+        const total = tH + gap + bH;
+        const targetH = Math.max(160, h * 0.58); // occupy ~58% of viewport height
+        scale = Math.max(0.6, Math.min(3, targetH / total));
+      }
       const total = tH + gap + bH;
       const preYTop = Math.max(0, Math.round(((h / scale) - total) / 2));
       treble.y = preYTop;
       bass.y = preYTop + tH + gap;
       vfGrand = { renderer, context: ctxVF, treble, bass, key, scale };
     } else {
+      // Recompute scale in auto mode on resize
+      if (getScaleMode() === 'auto') {
+        let tH = 60, bH = 60;
+        try { tH = vfGrand.treble.getHeight ? vfGrand.treble.getHeight() : 60; } catch {}
+        try { bH = vfGrand.bass.getHeight ? vfGrand.bass.getHeight() : 60; } catch {}
+        const total = tH + gap + bH;
+        const targetH = Math.max(160, h * 0.58);
+        scale = Math.max(0.6, Math.min(3, targetH / total));
+      }
       vfGrand.scale = scale;
       vfGrand.treble.x = preX; vfGrand.treble.width = preWidth;
       vfGrand.bass.x = preX; vfGrand.bass.width = preWidth;
@@ -891,7 +917,7 @@
   const PREF_ASPECT = 'staffy.aspect';
 
   function applyLayoutPrefs() {
-  const fit = (localStorage.getItem(PREF_FIT) || 'width');
+  const fit = (localStorage.getItem(PREF_FIT) || 'window');
     const aspect = (localStorage.getItem(PREF_ASPECT) || '4:3');
     document.documentElement.style.setProperty('--aspect', aspect === '16:9' ? '16 / 9' : '4 / 3');
   document.body.classList.toggle('fit-height', fit === 'height');
@@ -899,7 +925,10 @@
   document.body.classList.toggle('fit-window', fit === 'window');
   if (btnFit) btnFit.textContent = `Fit: ${fit === 'height' ? 'Height' : fit === 'window' ? 'Window' : 'Width'}`;
     if (btnAspect) btnAspect.textContent = `Aspect: ${aspect}`;
-    if (btnScale) btnScale.textContent = `Size: ${Math.round(getNotationScale() * 100)}%`;
+    if (btnScale) {
+        const mode = getScaleMode();
+        btnScale.textContent = mode === 'auto' ? 'Size: Auto' : `Size: ${Math.round(getManualScale() * 100)}%`;
+      }
     // Recompute sizes and visuals
     resizeCanvas();
     initStars();
@@ -926,10 +955,23 @@
 
   if (btnScale) {
     btnScale.addEventListener('click', () => {
-      const current = getNotationScale();
-      const i = SCALE_PRESETS.findIndex(v => Math.abs(v - current) < 1e-6);
-      const next = SCALE_PRESETS[(i + 1) % SCALE_PRESETS.length];
-      localStorage.setItem(PREF_SCALE, String(next));
+      const mode = getScaleMode();
+      if (mode === 'auto') {
+        // switch to first manual preset
+        localStorage.setItem(PREF_SCALE_MODE, 'manual');
+        localStorage.setItem(PREF_SCALE, String(SCALE_PRESETS[1]));
+      } else {
+        // cycle manual presets and back to auto
+        const current = getManualScale();
+        const i = SCALE_PRESETS.findIndex(v => Math.abs(v - current) < 1e-6);
+        const nextIndex = (i + 1) % (SCALE_PRESETS.length + 1);
+        if (nextIndex === SCALE_PRESETS.length) {
+          localStorage.setItem(PREF_SCALE_MODE, 'auto');
+        } else {
+          localStorage.setItem(PREF_SCALE_MODE, 'manual');
+          localStorage.setItem(PREF_SCALE, String(SCALE_PRESETS[nextIndex]));
+        }
+      }
       applyLayoutPrefs();
     });
   }
