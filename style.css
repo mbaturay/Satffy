@@ -1,0 +1,101 @@
+/* Base styles for Staff Wars Clone */
+html, body {
+  height: 100%;
+  margin: 0;
+  background: radial-gradient(1000px 600px at 50% 50%, #02030a, #000000 70%);
+  color: #e6e6e6;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Center the canvas */
+body {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh; /* robust vertical centering incl. mobile UI */
+  padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
+           max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  box-sizing: border-box;
+}
+
+/* Aspect managed via CSS variable for flexibility */
+:root {
+  --aspect: 4 / 3;
+}
+
+canvas#gameCanvas {
+  /* Make the canvas responsive while preserving aspect ratio */
+  width: min(96vw, 1100px);
+  max-height: min(92dvh, 820px);
+  aspect-ratio: var(--aspect); /* height auto is implied */
+  height: auto;
+  image-rendering: pixelated;
+  border: 1px solid #1a1a1a;
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.6), inset 0 0 12px rgba(255, 255, 255, 0.05);
+  background: transparent;
+}
+
+/* Fit modes: default is fit-width, optional fit-height takes precedence */
+.fit-height canvas#gameCanvas {
+  width: auto;
+  max-height: min(92dvh, 820px);
+}
+
+.fit-width canvas#gameCanvas {
+  width: min(96vw, 1100px);
+  max-height: none;
+}
+
+/* Fit the entire browser window */
+body.fit-window {
+  padding: 0; /* avoid introducing scrollbars */
+  place-items: normal; /* disable grid centering; canvas will fill */
+}
+
+body.fit-window canvas#gameCanvas {
+  position: fixed;
+  inset: 0; /* top:0 right:0 bottom:0 left:0 */
+  width: 100vw;
+  height: 100dvh;
+  max-height: none;
+  max-width: none;
+  aspect-ratio: auto;
+  display: block;
+}
+
+/* Controls overlay */
+.controls {
+  position: fixed;
+  bottom: max(12px, calc(env(safe-area-inset-bottom) + 8px));
+  right: max(12px, calc(env(safe-area-inset-right) + 8px));
+  display: flex;
+  gap: 8px;
+  z-index: 10;
+}
+
+.controls button {
+  appearance: none;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(0,0,0,0.4);
+  color: #eaeaea;
+  padding: 6px 10px;
+  font: 600 12px/1 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4), inset 0 0 10px rgba(255,255,255,0.04);
+  cursor: pointer;
+}
+
+.controls button:hover {
+  background: rgba(30,30,30,0.5);
+}
+
+.controls button:active {
+  transform: translateY(1px);
+}
+
+@media (max-width: 420px) {
+  canvas#gameCanvas {
+    width: 94vw;
+    max-height: 86dvh;
+    box-shadow: 0 0 16px rgba(0, 0, 0, 0.5);
+  }
+}

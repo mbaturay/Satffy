@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Staff Wars Clone</title>
+    <link rel="stylesheet" href="style.css" />
+  <!-- VexFlow v3 UMD for musical notation rendering (exposes window.Vex.Flow) -->
+  <script src="https://cdn.jsdelivr.net/npm/vexflow@3.0.9/releases/vexflow-min.js"></script>
+  </head>
+  <body>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div class="controls" role="group" aria-label="Layout Controls">
+      <button id="btnFit" type="button" title="Toggle Fit Mode (width/height/window)">Fit: Width</button>
+      <button id="btnAspect" type="button" title="Toggle Aspect Ratio (4:3 / 16:9)">Aspect: 4:3</button>
+      <button id="btnScale" type="button" title="Cycle Notation Size (125% / 150% / 175% / 200%)">Size: 150%</button>
+    </div>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <script src="game.js" defer></script>
+  </body>
+  </html>
