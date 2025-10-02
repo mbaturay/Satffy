@@ -164,17 +164,23 @@
   function ensureVexflowGrand() {
     if (!VF) return null;
     const { marginX, staffWidth, w, h, gap, lineSpacing } = getGrandMetrics();
+    const getSelectedKeySig = () => {
+      const r = ((rootSelect && rootSelect.value) || 'C').toUpperCase();
+      const t = (scaleSelect && scaleSelect.value) || 'major';
+      return t === 'minor' ? `${r}m` : r;
+    };
+    const keySig = getSelectedKeySig();
     const scale = getNotationScale();
     const preX = marginX / scale;
     const preWidth = staffWidth / scale;
-    const key = `grand|${preX}|${preWidth}|${w}|${h}|s${scale}|g${gap}`;
+    const key = `grand|${preX}|${preWidth}|${w}|${h}|s${scale}|g${gap}|k${keySig}`;
     if (!vfGrand || !vfGrand.renderer || vfGrand.key !== key) {
       const renderer = new VF.Renderer(canvas, VF.Renderer.Backends.CANVAS);
       const ctxVF = renderer.getContext();
       const treble = new VF.Stave(preX, 0, preWidth);
-      treble.addClef('treble');
+      treble.addClef('treble'); treble.addKeySignature(keySig);
       const bass = new VF.Stave(preX, 0, preWidth);
-      bass.addClef('bass');
+      bass.addClef('bass'); bass.addKeySignature(keySig);
       // Estimate stave height and position them around center
       let tH = 60, bH = 60;
       try { tH = treble.getHeight ? treble.getHeight() : 60; } catch {}
@@ -350,16 +356,23 @@
     scaleIndex = 0;
     scaleStartTime = performance.now();
   }
-  function midiToKeyAndAcc(midi){
-    const pc = ((midi%12)+12)%12;
-    const octave = Math.floor(midi/12)-1;
-    // prefer sharps for accidentals
-    const pcToKey = {
-      0:'c',1:'c#',2:'d',3:'d#',4:'e',5:'f',6:'f#',7:'g',8:'g#',9:'a',10:'a#',11:'b'
-    };
-    const key = `${pcToKey[pc]}/${octave}`;
-    const acc = /#/.test(key) ? '#' : null;
-    return { key, acc };
+  // Build diatonic letter sequences for rendering under the selected key signature
+  const LETTERS = ['C','D','E','F','G','A','B'];
+  const LETTER_INDEX = { C:0,D:1,E:2,F:3,G:4,A:5,B:6 };
+  function buildKeysForScale(root='C', startOctave=4, length=15){
+    root = (root||'C').toUpperCase();
+    let idx = LETTER_INDEX[root] ?? 0;
+    let octave = startOctave;
+    let prevLetter = root;
+    const keys = [];
+    for (let i=0;i<length;i++){
+      const letter = LETTERS[(idx + i) % 7];
+      // increment octave when wrapping from B to C
+      if (i>0 && prevLetter === 'B' && letter === 'C') octave += 1;
+      keys.push(`${letter.toLowerCase()}/${octave}`);
+      prevLetter = letter;
+    }
+    return keys;
   }
   function drawScaleNotes() {
     const vf = ensureVexflowGrand();
@@ -367,19 +380,13 @@
     const { staffWidth } = getGrandMetrics();
     const vexX = vf.treble.x;
     const vexWidth = vf.treble.width;
-    // Build VexFlow notes for treble
-    const tNotes = scaleSeqTreble.map(m => {
-      const { key, acc } = midiToKeyAndAcc(m);
-      const n = new VF.StaveNote({ clef:'treble', keys:[key], duration:'q' });
-      if (acc) n.addAccidental(0, new VF.Accidental(acc));
-      return n;
-    });
-    const bNotes = scaleSeqBass.map(m => {
-      const { key, acc } = midiToKeyAndAcc(m);
-      const n = new VF.StaveNote({ clef:'bass', keys:[key], duration:'q' });
-      if (acc) n.addAccidental(0, new VF.Accidental(acc));
-      return n;
-    });
+    // Build VexFlow notes for treble/bass using diatonic letters only; key signature provides accidentals
+    const root = ((rootSelect && rootSelect.value) || 'C').toUpperCase();
+    const len = scaleSeqPC.length || 15;
+    const tKeys = buildKeysForScale(root, 4, len);
+    const bKeys = buildKeysForScale(root, 2, len);
+    const tNotes = tKeys.map(k => new VF.StaveNote({ clef:'treble', keys:[k], duration:'q' }));
+    const bNotes = bKeys.map(k => new VF.StaveNote({ clef:'bass', keys:[k], duration:'q' }));
     const vTreble = new VF.Voice({ num_beats: Math.max(1, tNotes.length), beat_value: 4 }).setMode(VF.Voice.Mode.SOFT);
     vTreble.addTickables(tNotes);
     const vBass = new VF.Voice({ num_beats: Math.max(1, bNotes.length), beat_value: 4 }).setMode(VF.Voice.Mode.SOFT);
