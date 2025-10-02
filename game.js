@@ -7,9 +7,11 @@
   const ctx = canvas.getContext('2d');
   // VexFlow setup (global Vex from UMD)
   const VF = (window.Vex && window.Vex.Flow) || window.Flow || window.VexFlow || null;
-  // Persistent VexFlow renderer/context/stave
+  // Persistent VexFlow renderer/context/staves
   /** @type {{ renderer: any, context: CanvasRenderingContext2D, stave: any, key: string, scale: number } | null } */
   let vfState = null;
+  /** @type {{ renderer: any, context: CanvasRenderingContext2D, treble: any, bass: any, key: string, scale: number } | null } */
+  let vfGrand = null;
   // Notation scale presets (percentage multipliers)
   const SCALE_PRESETS = [1.25, 1.5, 1.75, 2.0];
   const PREF_SCALE = 'staffy.scale';
@@ -114,6 +116,13 @@
     return { w, h, marginX, staffWidth, centerY, lineSpacing, topLineY, bottomLineY };
   }
 
+  // Grand staff metrics: stack two staves with a gap
+  function getGrandMetrics() {
+    const base = getStaffMetrics();
+    const gap = Math.round(base.lineSpacing * 2.2);
+    return { ...base, gap };
+  }
+
   // Ensure a persistent VexFlow context/stave is ready for the current canvas metrics
   function ensureVexflow() {
     if (!VF) return null;
@@ -151,6 +160,46 @@
     return vfState;
   }
 
+  // Ensure grand staff (treble + bass) for scale mode
+  function ensureVexflowGrand() {
+    if (!VF) return null;
+    const { marginX, staffWidth, w, h, gap, lineSpacing } = getGrandMetrics();
+    const scale = getNotationScale();
+    const preX = marginX / scale;
+    const preWidth = staffWidth / scale;
+    const key = `grand|${preX}|${preWidth}|${w}|${h}|s${scale}|g${gap}`;
+    if (!vfGrand || !vfGrand.renderer || vfGrand.key !== key) {
+      const renderer = new VF.Renderer(canvas, VF.Renderer.Backends.CANVAS);
+      const ctxVF = renderer.getContext();
+      const treble = new VF.Stave(preX, 0, preWidth);
+      treble.addClef('treble');
+      const bass = new VF.Stave(preX, 0, preWidth);
+      bass.addClef('bass');
+      // Estimate stave height and position them around center
+      let tH = 60, bH = 60;
+      try { tH = treble.getHeight ? treble.getHeight() : 60; } catch {}
+      try { bH = bass.getHeight ? bass.getHeight() : 60; } catch {}
+      const total = tH + gap + bH;
+      const preYTop = Math.max(0, Math.round(((h / scale) - total) / 2));
+      treble.y = preYTop;
+      bass.y = preYTop + tH + gap;
+      vfGrand = { renderer, context: ctxVF, treble, bass, key, scale };
+    } else {
+      vfGrand.scale = scale;
+      vfGrand.treble.x = preX; vfGrand.treble.width = preWidth;
+      vfGrand.bass.x = preX; vfGrand.bass.width = preWidth;
+      let tH = 60, bH = 60;
+      try { tH = vfGrand.treble.getHeight ? vfGrand.treble.getHeight() : 60; } catch {}
+      try { bH = vfGrand.bass.getHeight ? vfGrand.bass.getHeight() : 60; } catch {}
+      const total = tH + gap + bH;
+      const preYTop = Math.max(0, Math.round(((h / scale) - total) / 2));
+      vfGrand.treble.y = preYTop;
+      vfGrand.bass.y = preYTop + tH + gap;
+      vfGrand.key = key;
+    }
+    return vfGrand;
+  }
+
   // Draw a responsive treble clef staff across the middle
   function drawStaff() {
     const vf = ensureVexflow();
@@ -159,6 +208,16 @@
     vf.context.save();
     vf.context.scale(vf.scale, vf.scale);
     vf.stave.setContext(vf.context).draw();
+    vf.context.restore();
+  }
+
+  function drawGrandStaff() {
+    const vf = ensureVexflowGrand();
+    if (!vf) return;
+    vf.context.save();
+    vf.context.scale(vf.scale, vf.scale);
+    vf.treble.setContext(vf.context).draw();
+    vf.bass.setContext(vf.context).draw();
     vf.context.restore();
   }
 
@@ -252,6 +311,111 @@
   const HITS_PER_LEVEL = 10; // level up every M correct hits
   const SCORE_BASE = 1; // base points
   const SCORE_EARLY_BONUS = 4; // bonus scales with xNorm (0..1)
+
+  // --- Scale Mode State ---
+  let scaleMode = true; // pivot to theoretical mode by default on this branch
+  const rootSelect = document.getElementById('rootSelect');
+  const scaleSelect = document.getElementById('scaleSelect');
+  const tempoSlider = document.getElementById('tempoSlider');
+  const tempoInput = document.getElementById('tempoInput');
+  let tempoBPM = 120;
+  /** @type {number[]} */
+  let scaleSeqTreble = [];
+  /** @type {number[]} */
+  let scaleSeqBass = [];
+  /** @type {number[]} */
+  let scaleSeqPC = []; // pitch classes of degrees for matching
+  let scaleStartTime = 0;
+  let scaleIndex = 0; // expected degree index
+  let scaleScore = 0;
+  const ROOT_TO_PC = { C:0, D:2, E:4, F:5, G:7, A:9, B:11 };
+  const SCALE_OFFSETS = {
+    major: [0,2,4,5,7,9,11],
+    minor: [0,2,3,5,7,8,10], // natural minor
+  };
+  function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+  function generateScaleSequences(root='C', type='major'){
+    const rootPC = ROOT_TO_PC[root] ?? 0;
+    const degrees = SCALE_OFFSETS[type] || SCALE_OFFSETS.major;
+    // two octaves ascending, include top root (15 notes)
+    const steps = [];
+    for (let o=0;o<2;o++) for (const d of degrees) steps.push(d + 12*o);
+    steps.push(24);
+    // pick starting octaves for treble and bass rendering
+    const trebleStartMidi = (4+1)*12 + rootPC; // octave 4 root
+    const bassStartMidi = (2+1)*12 + rootPC; // octave 2 root
+    scaleSeqTreble = steps.map(s => trebleStartMidi + s);
+    scaleSeqBass = steps.map(s => bassStartMidi + s);
+    scaleSeqPC = steps.map(s => (rootPC + s)%12);
+    scaleIndex = 0;
+    scaleStartTime = performance.now();
+  }
+  function midiToKeyAndAcc(midi){
+    const pc = ((midi%12)+12)%12;
+    const octave = Math.floor(midi/12)-1;
+    // prefer sharps for accidentals
+    const pcToKey = {
+      0:'c',1:'c#',2:'d',3:'d#',4:'e',5:'f',6:'f#',7:'g',8:'g#',9:'a',10:'a#',11:'b'
+    };
+    const key = `${pcToKey[pc]}/${octave}`;
+    const acc = /#/.test(key) ? '#' : null;
+    return { key, acc };
+  }
+  function drawScaleNotes() {
+    const vf = ensureVexflowGrand();
+    if (!vf) return;
+    const { staffWidth } = getGrandMetrics();
+    const vexX = vf.treble.x;
+    const vexWidth = vf.treble.width;
+    // Build VexFlow notes for treble
+    const tNotes = scaleSeqTreble.map(m => {
+      const { key, acc } = midiToKeyAndAcc(m);
+      const n = new VF.StaveNote({ clef:'treble', keys:[key], duration:'q' });
+      if (acc) n.addAccidental(0, new VF.Accidental(acc));
+      return n;
+    });
+    const bNotes = scaleSeqBass.map(m => {
+      const { key, acc } = midiToKeyAndAcc(m);
+      const n = new VF.StaveNote({ clef:'bass', keys:[key], duration:'q' });
+      if (acc) n.addAccidental(0, new VF.Accidental(acc));
+      return n;
+    });
+    const vTreble = new VF.Voice({ num_beats: Math.max(1, tNotes.length), beat_value: 4 }).setMode(VF.Voice.Mode.SOFT);
+    vTreble.addTickables(tNotes);
+    const vBass = new VF.Voice({ num_beats: Math.max(1, bNotes.length), beat_value: 4 }).setMode(VF.Voice.Mode.SOFT);
+    vBass.addTickables(bNotes);
+    const formatter = new VF.Formatter();
+    formatter.joinVoices([vTreble]).format([vTreble], vexWidth);
+    formatter.joinVoices([vBass]).format([vBass], vexWidth);
+    vf.context.save();
+    vf.context.scale(vf.scale, vf.scale);
+    vTreble.draw(vf.context, vf.treble);
+    vBass.draw(vf.context, vf.bass);
+    // Highlight current expected note with a simple circle
+    const beatDur = 60/tempoBPM;
+    const now = performance.now();
+    const elapsed = (now - scaleStartTime)/1000;
+    const curIndex = clamp(Math.floor(elapsed/beatDur), 0, scaleSeqPC.length-1);
+    const trebleTick = vTreble.getTickables()[curIndex];
+    const bassTick = vBass.getTickables()[curIndex];
+    vf.context.restore();
+    if (trebleTick) {
+      const x = (trebleTick.getAbsoluteX ? trebleTick.getAbsoluteX() : (vexX + (curIndex+0.5)*(vexWidth/tNotes.length))) * vf.scale;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,230,120,0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, (vf.treble.getYForTopText ? vf.treble.getYForTopText() : 30)*vf.scale, 10, 0, Math.PI*2); ctx.stroke();
+      ctx.restore();
+    }
+    if (bassTick) {
+      const x = (bassTick.getAbsoluteX ? bassTick.getAbsoluteX() : (vexX + (curIndex+0.5)*(vexWidth/bNotes.length))) * vf.scale;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,230,120,0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, (vf.bass.getYForTopText ? vf.bass.getYForTopText() : 130)*vf.scale, 10, 0, Math.PI*2); ctx.stroke();
+      ctx.restore();
+    }
+  }
 
   // Level computation and small flash effect when level changes
   function getLevel() {
@@ -534,16 +698,43 @@
     if (!isNoteOn && !isNoteOff) return;
     if (isNoteOn) {
       ensureAudioRunning();
-      const inRange = typeof data1 === 'number' && data1 >= 60 && data1 <= 83;
-      const mappedAny = midiNoteToLetterAny(data1);
-      console.debug('[MIDI NoteOn]', { note: data1, velocity: data2, mapped: mappedAny, inRange });
-      if (!inRange) {
-        // Out-of-register counts as miss
-        registerMiss('out-of-register');
-        return;
+      if (scaleMode) {
+        handleScaleHit(data1, data2);
+      } else {
+        const inRange = typeof data1 === 'number' && data1 >= 60 && data1 <= 83;
+        const mappedAny = midiNoteToLetterAny(data1);
+        console.debug('[MIDI NoteOn]', { note: data1, velocity: data2, mapped: mappedAny, inRange });
+        if (!inRange) {
+          registerMiss('out-of-register');
+          return;
+        }
+        const noteObj = midiNoteToLetter(data1);
+        if (noteObj != null) attemptHit(noteObj);
       }
-      const noteObj = midiNoteToLetter(data1);
-      if (noteObj != null) attemptHit(noteObj);
+    }
+  }
+
+  function handleScaleHit(midi, velocity){
+    if (!Array.isArray(scaleSeqPC) || !scaleSeqPC.length) return;
+    const pc = ((midi%12)+12)%12;
+    const beatDur = 60/tempoBPM;
+    const now = performance.now();
+    const tElapsed = (now - scaleStartTime)/1000;
+    const expectedTime = scaleStartTime + scaleIndex*beatDur*1000;
+    const dtMs = Math.abs(now - expectedTime);
+    const expectedPC = scaleSeqPC[scaleIndex];
+    const pitchMatch = (pc === expectedPC);
+    if (pitchMatch) {
+      // Score: base 10 minus timing penalty (1 point per 50ms), min 2
+      const timingPenalty = Math.floor(dtMs/50);
+      const points = clamp(10 - timingPenalty, 2, 10);
+      scaleScore += points;
+      addFeedback(`+${points}`, 'rgba(120,255,120,0.98)');
+      playNoteSound(midi);
+      scaleIndex = Math.min(scaleIndex+1, scaleSeqPC.length-1);
+    } else {
+      addFeedback('Miss', 'rgba(255,80,80,0.95)');
+      playMissSound();
     }
   }
 
@@ -587,16 +778,17 @@
     ctx.fillStyle = 'rgba(255,232,80,0.96)';
     ctx.font = hudFont;
     ctx.textBaseline = 'top';
-    ctx.fillText(`Score: ${score}`, leftPad, 8);
+  const scoreLine = scaleMode ? `Scale Score: ${scaleScore}` : `Score: ${score}`;
+  ctx.fillText(scoreLine, leftPad, 8);
 
     // Misses and Level labels below score
     ctx.font = hudFontSmall;
     ctx.fillStyle = 'rgba(255,255,255,0.9)';
     const line1Y = 8 + Math.ceil(parseInt(hudFont, 10) * 1.1);
-    ctx.fillText(`Misses: ${currentMisses}`, leftPad, line1Y);
+  if (!scaleMode) ctx.fillText(`Misses: ${currentMisses}`, leftPad, line1Y);
 
     // Level with a subtle flash when just increased
-    const level = getLevel();
+  const level = getLevel();
     let levelColor = 'rgba(180,220,255,0.95)';
     const nowHud = performance.now();
     if (nowHud - levelFlashAt < 500) {
@@ -606,7 +798,7 @@
     }
     ctx.fillStyle = levelColor;
     const line2Y = line1Y + Math.ceil(parseInt(hudFontSmall, 10) * 1.25);
-    ctx.fillText(`Level: ${level}`, leftPad, line2Y);
+  if (!scaleMode) ctx.fillText(`Level: ${level}`, leftPad, line2Y);
 
   // Feedback messages fade out
     const now = performance.now();
@@ -646,11 +838,16 @@
     last = now;
     updateStars(dt);
     drawStars();
-    drawStaff();
-    if (!gameOver) {
-      updateNotes(dt);
+    if (scaleMode) {
+      drawGrandStaff();
+      drawScaleNotes();
+    } else {
+      drawStaff();
+      if (!gameOver) {
+        updateNotes(dt);
+      }
+      drawNotes();
     }
-    drawNotes();
     drawHUD();
     requestAnimationFrame(loop);
   }
@@ -708,8 +905,31 @@
     });
   }
 
-  // Start with one active note
-  spawnNewNote();
+  // Theory mode wiring
+  if (rootSelect && scaleSelect) {
+    const onChange = () => {
+      const root = (rootSelect.value || 'C').toUpperCase();
+      const type = (scaleSelect.value || 'major');
+      generateScaleSequences(root, type);
+      scaleStartTime = performance.now();
+    };
+    rootSelect.addEventListener('change', onChange);
+    scaleSelect.addEventListener('change', onChange);
+    onChange();
+  } else {
+    scaleMode = false;
+  }
+  if (tempoSlider && tempoInput) {
+    const syncFromSlider = () => { tempoBPM = clamp(parseInt(tempoSlider.value || '120', 10) || 120, 40, 240); tempoInput.value = String(tempoBPM); };
+    const syncFromInput = () => { tempoBPM = clamp(parseInt(tempoInput.value || '120', 10) || 120, 40, 240); tempoSlider.value = String(tempoBPM); };
+    tempoSlider.addEventListener('input', () => { syncFromSlider(); scaleStartTime = performance.now(); });
+    tempoInput.addEventListener('change', () => { syncFromInput(); scaleStartTime = performance.now(); });
+    syncFromSlider();
+  }
+  // Fallback to game mode if theory UI is missing
+  if (!scaleMode) {
+    spawnNewNote();
+  }
   applyLayoutPrefs();
   requestAnimationFrame(loop);
 })();

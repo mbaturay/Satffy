@@ -62,6 +62,46 @@ body.fit-window canvas#gameCanvas {
   display: block;
 }
 
+/* Theory controls overlay */
+.theory-controls {
+  position: fixed;
+  top: max(12px, calc(env(safe-area-inset-top) + 8px));
+  left: max(12px, calc(env(safe-area-inset-left) + 8px));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 11;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid rgba(255,255,255,0.2);
+  padding: 6px 10px;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4), inset 0 0 10px rgba(255,255,255,0.04);
+}
+.theory-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.theory-controls select,
+.theory-controls input[type="number"],
+.theory-controls input[type="range"] {
+  background: rgba(0,0,0,0.3);
+  color: #eaeaea;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 6px;
+}
+.theory-controls input[type="number"] {
+  width: 72px;
+  padding: 4px 6px;
+}
+.theory-controls .tempo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.theory-controls .bpm { opacity: 0.8; font-size: 12px; }
+
 /* Controls overlay */
 .controls {
   position: fixed;
