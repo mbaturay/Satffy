@@ -331,6 +331,10 @@
   let scaleSeqBass = [];
   /** @type {number[]} */
   let scaleSeqPC = []; // pitch classes of degrees for matching
+  /** @type {string[]} */
+  let scaleKeysTreble = [];
+  /** @type {string[]} */
+  let scaleKeysBass = [];
   let scaleStartTime = 0;
   let scaleIndex = 0; // expected degree index
   let scaleScore = 0;
@@ -343,16 +347,26 @@
   function generateScaleSequences(root='C', type='major'){
     const rootPC = ROOT_TO_PC[root] ?? 0;
     const degrees = SCALE_OFFSETS[type] || SCALE_OFFSETS.major;
-    // two octaves ascending, include top root (15 notes)
-    const steps = [];
-    for (let o=0;o<2;o++) for (const d of degrees) steps.push(d + 12*o);
-    steps.push(24);
-    // pick starting octaves for treble and bass rendering
-    const trebleStartMidi = (4+1)*12 + rootPC; // octave 4 root
-    const bassStartMidi = (2+1)*12 + rootPC; // octave 2 root
+    // Two octaves ascending (include top root), then descending back to base root (exclude duplicate top root)
+    const ascend = [];
+    for (let o=0;o<2;o++) for (const d of degrees) ascend.push(d + 12*o);
+    ascend.push(24);
+    const descend = ascend.slice(0, -1).slice().reverse();
+    const steps = ascend.concat(descend);
+    // Starting octaves for rendering
+    const trebleStartMidi = (4+1)*12 + rootPC; // C4-based
+    const bassStartMidi = (2+1)*12 + rootPC; // C2-based
     scaleSeqTreble = steps.map(s => trebleStartMidi + s);
     scaleSeqBass = steps.map(s => bassStartMidi + s);
     scaleSeqPC = steps.map(s => (rootPC + s)%12);
+    // Build key strings for treble/bass using diatonic letters only; key signature provides accidentals
+    const ascLen = ascend.length;
+    const tAsc = buildKeysForScale(root, 4, ascLen);
+    const bAsc = buildKeysForScale(root, 2, ascLen);
+    const tDesc = tAsc.slice(0, -1).slice().reverse();
+    const bDesc = bAsc.slice(0, -1).slice().reverse();
+    scaleKeysTreble = tAsc.concat(tDesc);
+    scaleKeysBass = bAsc.concat(bDesc);
     scaleIndex = 0;
     scaleStartTime = performance.now();
   }
@@ -382,11 +396,10 @@
     const vexWidth = vf.treble.width;
     // Build VexFlow notes for treble/bass using diatonic letters only; key signature provides accidentals
     const root = ((rootSelect && rootSelect.value) || 'C').toUpperCase();
-    const len = scaleSeqPC.length || 15;
-    const tKeys = buildKeysForScale(root, 4, len);
-    const bKeys = buildKeysForScale(root, 2, len);
-    const tNotes = tKeys.map(k => new VF.StaveNote({ clef:'treble', keys:[k], duration:'q' }));
-    const bNotes = bKeys.map(k => new VF.StaveNote({ clef:'bass', keys:[k], duration:'q' }));
+  const tKeys = scaleKeysTreble && scaleKeysTreble.length ? scaleKeysTreble : buildKeysForScale(root, 4, scaleSeqPC.length || 15);
+  const bKeys = scaleKeysBass && scaleKeysBass.length ? scaleKeysBass : buildKeysForScale(root, 2, scaleSeqPC.length || 15);
+  const tNotes = tKeys.map(k => new VF.StaveNote({ clef:'treble', keys:[k], duration:'q' }));
+  const bNotes = bKeys.map(k => new VF.StaveNote({ clef:'bass', keys:[k], duration:'q' }));
     const vTreble = new VF.Voice({ num_beats: Math.max(1, tNotes.length), beat_value: 4 }).setMode(VF.Voice.Mode.SOFT);
     vTreble.addTickables(tNotes);
     const vBass = new VF.Voice({ num_beats: Math.max(1, bNotes.length), beat_value: 4 }).setMode(VF.Voice.Mode.SOFT);
