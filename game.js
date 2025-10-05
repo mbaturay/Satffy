@@ -7,9 +7,11 @@
   const ctx = canvas.getContext('2d');
   // VexFlow setup (global Vex from UMD)
   const VF = (window.Vex && window.Vex.Flow) || window.Flow || window.VexFlow || null;
-  // Persistent VexFlow renderer/context/stave
+  // Persistent VexFlow renderer/context/stave (single) and grand staff
   /** @type {{ renderer: any, context: CanvasRenderingContext2D, stave: any, key: string, scale: number } | null } */
   let vfState = null;
+  /** @type {{ renderer: any, context: CanvasRenderingContext2D, treble: any, bass: any, key: string, scale: number } | null } */
+  let vfGrand = null;
   // Notation scale presets (percentage multipliers)
   const SCALE_PRESETS = [1.25, 1.5, 1.75, 2.0];
   const PREF_SCALE = 'staffy.scale';
@@ -114,6 +116,13 @@
     return { w, h, marginX, staffWidth, centerY, lineSpacing, topLineY, bottomLineY };
   }
 
+  // Grand staff metrics helper
+  function getGrandMetrics() {
+    const base = getStaffMetrics();
+    const gap = Math.round(base.lineSpacing * 2.2);
+    return { ...base, gap };
+  }
+
   // Ensure a persistent VexFlow context/stave is ready for the current canvas metrics
   function ensureVexflow() {
     if (!VF) return null;
@@ -151,19 +160,58 @@
     return vfState;
   }
 
-  // Draw a responsive treble clef staff across the middle
-  function drawStaff() {
-    const vf = ensureVexflow();
-    if (!vf) return; // VexFlow not available
-    // Draw stave lines/clef each frame after clearing background
+  // Ensure a persistent grand staff (treble + bass) ready for current metrics
+  function ensureVexflowGrand() {
+    if (!VF) return null;
+    const { marginX, staffWidth, w, h, gap } = getGrandMetrics();
+    const scale = getNotationScale();
+    const preX = marginX / scale;
+    const preWidth = staffWidth / scale;
+    const key = `grand|${preX}|${preWidth}|${w}|${h}|s${scale}|g${gap}`;
+    if (!vfGrand || !vfGrand.renderer || vfGrand.key !== key) {
+      const renderer = new VF.Renderer(canvas, VF.Renderer.Backends.CANVAS);
+      const ctxVF = renderer.getContext();
+      const treble = new VF.Stave(preX, 0, preWidth);
+      treble.addClef('treble');
+      const bass = new VF.Stave(preX, 0, preWidth);
+      bass.addClef('bass');
+      let tH = 60, bH = 60;
+      try { tH = treble.getHeight ? treble.getHeight() : 60; } catch {}
+      try { bH = bass.getHeight ? bass.getHeight() : 60; } catch {}
+      const total = tH + gap + bH;
+      const preYTop = Math.max(0, Math.round(((h / scale) - total) / 2));
+      treble.y = preYTop;
+      bass.y = preYTop + tH + gap;
+      vfGrand = { renderer, context: ctxVF, treble, bass, key, scale };
+    } else {
+      vfGrand.scale = scale;
+      vfGrand.treble.x = preX; vfGrand.treble.width = preWidth;
+      vfGrand.bass.x = preX; vfGrand.bass.width = preWidth;
+      let tH = 60, bH = 60;
+      try { tH = vfGrand.treble.getHeight ? vfGrand.treble.getHeight() : 60; } catch {}
+      try { bH = vfGrand.bass.getHeight ? vfGrand.bass.getHeight() : 60; } catch {}
+      const total = tH + gap + bH;
+      const preYTop = Math.max(0, Math.round(((h / scale) - total) / 2));
+      vfGrand.treble.y = preYTop;
+      vfGrand.bass.y = preYTop + tH + gap;
+      vfGrand.key = key;
+    }
+    return vfGrand;
+  }
+
+  // Draw grand staff (treble + bass)
+  function drawGrandStaff() {
+    const vf = ensureVexflowGrand();
+    if (!vf) return;
     vf.context.save();
     vf.context.scale(vf.scale, vf.scale);
-    vf.stave.setContext(vf.context).draw();
+    vf.treble.setContext(vf.context).draw();
+    vf.bass.setContext(vf.context).draw();
     vf.context.restore();
   }
 
   // Notes storage and generation
-  /** @typedef {{ letter: 'A'|'B'|'C'|'D'|'E'|'F'|'G', octave: number, xNorm: number, createdAt: number, speedPxSec: number }} Note */
+  /** @typedef {{ letter: 'A'|'B'|'C'|'D'|'E'|'F'|'G', octave: number, clef: 'treble'|'bass', xNorm: number, createdAt: number, speedPxSec: number }} Note */
   /** @type {Note[]} */
   const notes = [];
   /** @type {Note|null} */
@@ -191,35 +239,30 @@
 
   function drawNotes() {
     if (!VF || !notes.length) return;
-    const vf = ensureVexflow();
+    const vf = ensureVexflowGrand();
     if (!vf) return;
     const { staffWidth, marginX } = getStaffMetrics();
-    const vexX = vf.stave.x ?? (marginX / vf.scale);
-    const vexWidth = vf.stave.width ?? (staffWidth / vf.scale);
+    const vexX = vf.treble.x ?? (marginX / vf.scale);
+    const vexWidth = vf.treble.width ?? (staffWidth / vf.scale);
 
-    // Build a Voice containing our active notes (single-note mode still supported)
-    const vfNotes = notes.map(n => new VF.StaveNote({ clef: 'treble', keys: [`${n.letter.toLowerCase()}/${n.octave}`], duration: 'q' }));
-    const voice = new VF.Voice({ num_beats: Math.max(1, vfNotes.length), beat_value: 4 }).setMode(VF.Voice.Mode.SOFT);
-    voice.addTickables(vfNotes);
-
-    // Format notes within the stave width
+    const n = notes[0];
+    const keyStr = `${n.letter.toLowerCase()}/${n.octave}`;
+    const isTreble = (n.clef === 'treble');
+    const noteObj = new VF.StaveNote({ clef: isTreble ? 'treble' : 'bass', keys: [keyStr], duration: 'q' });
+    const voice = new VF.Voice({ num_beats: 1, beat_value: 4 }).setMode(VF.Voice.Mode.SOFT);
+    voice.addTickables([noteObj]);
     const formatter = new VF.Formatter();
-  formatter.joinVoices([voice]).format([voice], vexWidth);
+    formatter.joinVoices([voice]).format([voice], vexWidth);
 
-    // Shift each note horizontally based on its game xNorm position
-    voice.getTickables().forEach((note, i) => {
-      const n = notes[i];
-      const desiredX = vexX + n.xNorm * vexWidth;
-      note.setStave(vf.stave);
-      const currentX = note.getX();
-      const delta = desiredX - currentX;
-      note.setXShift((note.getXShift ? note.getXShift() : 0) + delta);
-    });
+    const desiredX = vexX + n.xNorm * vexWidth;
+    noteObj.setStave(isTreble ? vf.treble : vf.bass);
+    const currentX = noteObj.getX();
+    const delta = desiredX - currentX;
+    noteObj.setXShift((noteObj.getXShift ? noteObj.getXShift() : 0) + delta);
 
-    // Draw the notes over the stave with scaling applied
     vf.context.save();
     vf.context.scale(vf.scale, vf.scale);
-    voice.draw(vf.context, vf.stave);
+    voice.draw(vf.context, isTreble ? vf.treble : vf.bass);
     vf.context.restore();
   }
 
@@ -261,22 +304,28 @@
 
   function spawnNewNote() {
     notes.length = 0; // enforce single active note
-    // Expanded treble range: C4 up to B5 (natural notes)
-    const allowed = [
-      // Octave 4
+    // Randomly pick treble (C4..B5) or bass (C2..G3) range
+    const allowedTreble = [
       { letter: 'C', octave: 4 }, { letter: 'D', octave: 4 }, { letter: 'E', octave: 4 },
       { letter: 'F', octave: 4 }, { letter: 'G', octave: 4 }, { letter: 'A', octave: 4 }, { letter: 'B', octave: 4 },
-      // Octave 5
       { letter: 'C', octave: 5 }, { letter: 'D', octave: 5 }, { letter: 'E', octave: 5 },
       { letter: 'F', octave: 5 }, { letter: 'G', octave: 5 }, { letter: 'A', octave: 5 }, { letter: 'B', octave: 5 },
     ];
-    const pick = allowed[Math.floor(Math.random() * allowed.length)];
+    const allowedBass = [
+      // Octave 2 (C..B) and Octave 3 (C..G)
+      { letter: 'C', octave: 2 }, { letter: 'D', octave: 2 }, { letter: 'E', octave: 2 }, { letter: 'F', octave: 2 }, { letter: 'G', octave: 2 }, { letter: 'A', octave: 2 }, { letter: 'B', octave: 2 },
+      { letter: 'C', octave: 3 }, { letter: 'D', octave: 3 }, { letter: 'E', octave: 3 }, { letter: 'F', octave: 3 }, { letter: 'G', octave: 3 },
+    ];
+    const pickBass = Math.random() < 0.5;
+    const pool = pickBass ? allowedBass : allowedTreble;
+    const pick = pool[Math.floor(Math.random() * pool.length)];
     const letter = pick.letter;
     const octave = pick.octave;
+    const clef = pickBass ? 'bass' : 'treble';
     const xNorm = 1.06; // start slightly off the right edge
     const jitter = 0.85 + Math.random() * 0.3; // minor variation 85%..115%
     const speedPxSec = Math.min(SPEED_CAP, baseNoteSpeed * jitter);
-    const n = { letter, octave, xNorm, createdAt: performance.now(), speedPxSec };
+    const n = { letter, octave, clef, xNorm, createdAt: performance.now(), speedPxSec };
     notes.push(n);
     activeNote = n;
   }
@@ -489,8 +538,8 @@
   const NATURAL_PCS = [0, 2, 4, 5, 7, 9, 11];
 
   function midiNoteToLetter(midiNote) {
-    // Accept only treble clef register: C4 (60) to B5 (83)
-    if (typeof midiNote !== 'number' || midiNote < 60 || midiNote > 83) return null;
+    // Accept grand staff registers: Bass C2 (36) up to Treble B5 (83)
+    if (typeof midiNote !== 'number' || midiNote < 36 || midiNote > 83) return null;
     const pc = ((midiNote % 12) + 12) % 12;
     const octave = Math.floor(midiNote / 12) - 1;
     if (NATURAL_PC_TO_LETTER[pc]) return { letter: NATURAL_PC_TO_LETTER[pc], octave };
@@ -534,7 +583,7 @@
     if (!isNoteOn && !isNoteOff) return;
     if (isNoteOn) {
       ensureAudioRunning();
-      const inRange = typeof data1 === 'number' && data1 >= 60 && data1 <= 83;
+      const inRange = typeof data1 === 'number' && data1 >= 36 && data1 <= 83;
       const mappedAny = midiNoteToLetterAny(data1);
       console.debug('[MIDI NoteOn]', { note: data1, velocity: data2, mapped: mappedAny, inRange });
       if (!inRange) {
@@ -646,7 +695,7 @@
     last = now;
     updateStars(dt);
     drawStars();
-    drawStaff();
+  drawGrandStaff();
     if (!gameOver) {
       updateNotes(dt);
     }
