@@ -217,6 +217,17 @@
   /** @type {Note|null} */
   let activeNote = null;
 
+  // Spawn mode: Both (default), Treble-only, Bass-only
+  const PREF_MODE = 'staffy.mode';
+  /** @type {'Both'|'Treble'|'Bass'} */
+  let spawnMode = (localStorage.getItem(PREF_MODE) || 'Both');
+  function setSpawnMode(mode) {
+    spawnMode = mode;
+    localStorage.setItem(PREF_MODE, spawnMode);
+    // Provide immediate feedback
+    addFeedback(`Mode: ${spawnMode}`, 'rgba(200,220,255,0.95)', 0.7);
+  }
+
   // Map letter to diatonic step relative to E4 (bottom line). Each step is half lineSpacing.
   const LETTER_TO_STEP = { E: 0, F: 1, G: 2, A: 3, B: 4, C: 5, D: 6 };
   function getDiatonicStep(letter, octave) {
@@ -304,7 +315,7 @@
 
   function spawnNewNote() {
     notes.length = 0; // enforce single active note
-    // Randomly pick treble (C4..B5) or bass (C2..G3) range
+    // Allowed pools
     const allowedTreble = [
       { letter: 'C', octave: 4 }, { letter: 'D', octave: 4 }, { letter: 'E', octave: 4 },
       { letter: 'F', octave: 4 }, { letter: 'G', octave: 4 }, { letter: 'A', octave: 4 }, { letter: 'B', octave: 4 },
@@ -316,8 +327,20 @@
       { letter: 'C', octave: 2 }, { letter: 'D', octave: 2 }, { letter: 'E', octave: 2 }, { letter: 'F', octave: 2 }, { letter: 'G', octave: 2 }, { letter: 'A', octave: 2 }, { letter: 'B', octave: 2 },
       { letter: 'C', octave: 3 }, { letter: 'D', octave: 3 }, { letter: 'E', octave: 3 }, { letter: 'F', octave: 3 }, { letter: 'G', octave: 3 },
     ];
-    const pickBass = Math.random() < 0.5;
-    const pool = pickBass ? allowedBass : allowedTreble;
+    // Decide pool based on mode
+    let pool;
+    let pickBass = false;
+    if (spawnMode === 'Treble') {
+      pool = allowedTreble;
+      pickBass = false;
+    } else if (spawnMode === 'Bass') {
+      pool = allowedBass;
+      pickBass = true;
+    } else {
+      // Both -> random
+      pickBass = Math.random() < 0.5;
+      pool = pickBass ? allowedBass : allowedTreble;
+    }
     const pick = pool[Math.floor(Math.random() * pool.length)];
     const letter = pick.letter;
     const octave = pick.octave;
@@ -583,7 +606,11 @@
     if (!isNoteOn && !isNoteOff) return;
     if (isNoteOn) {
       ensureAudioRunning();
-      const inRange = typeof data1 === 'number' && data1 >= 36 && data1 <= 83;
+      // Range depends on current mode
+      let lo = 36, hi = 83; // Both
+      if (spawnMode === 'Treble') { lo = 60; hi = 83; } // C4..B5
+      else if (spawnMode === 'Bass') { lo = 36; hi = 55; } // C2..G3
+      const inRange = typeof data1 === 'number' && data1 >= lo && data1 <= hi;
       const mappedAny = midiNoteToLetterAny(data1);
       console.debug('[MIDI NoteOn]', { note: data1, velocity: data2, mapped: mappedAny, inRange });
       if (!inRange) {
@@ -710,6 +737,7 @@
   const btnFit = document.getElementById('btnFit');
   const btnAspect = document.getElementById('btnAspect');
   const btnScale = document.getElementById('btnScale');
+  const btnMode = document.getElementById('btnMode');
   const PREF_FIT = 'staffy.fit';
   const PREF_ASPECT = 'staffy.aspect';
 
@@ -722,7 +750,8 @@
   document.body.classList.toggle('fit-window', fit === 'window');
   if (btnFit) btnFit.textContent = `Fit: ${fit === 'height' ? 'Height' : fit === 'window' ? 'Window' : 'Width'}`;
     if (btnAspect) btnAspect.textContent = `Aspect: ${aspect}`;
-    if (btnScale) btnScale.textContent = `Size: ${Math.round(getNotationScale() * 100)}%`;
+  if (btnScale) btnScale.textContent = `Size: ${Math.round(getNotationScale() * 100)}%`;
+  if (btnMode) btnMode.textContent = `Mode: ${spawnMode}`;
     // Recompute sizes and visuals
     resizeCanvas();
     initStars();
@@ -757,7 +786,17 @@
     });
   }
 
+  if (btnMode) {
+    btnMode.addEventListener('click', () => {
+      const next = spawnMode === 'Both' ? 'Treble' : spawnMode === 'Treble' ? 'Bass' : 'Both';
+      setSpawnMode(next);
+      applyLayoutPrefs();
+    });
+  }
+
   // Start with one active note
+  // Ensure mode from storage is applied
+  setSpawnMode(spawnMode);
   spawnNewNote();
   applyLayoutPrefs();
   requestAnimationFrame(loop);
