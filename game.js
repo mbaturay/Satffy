@@ -120,7 +120,7 @@
   function getGrandMetrics() {
     const base = getStaffMetrics();
     // Reduce the vertical distance between treble and bass staves
-    const GRAND_GAP_FACTOR = 1.1; // was ~2.2; smaller = closer staves
+  const GRAND_GAP_FACTOR = 0.6; // tighter spacing between treble and bass
     const gap = Math.round(base.lineSpacing * GRAND_GAP_FACTOR);
     return { ...base, gap };
   }
